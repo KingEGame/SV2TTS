@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 def get_mp3_duration(file_path):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     """
     Определяет длительность MP3 файла с использованием FFmpeg.
 
@@ -69,7 +70,7 @@ def convert_to_wav(input_audio, output_dir, output_prefix="part_", num_parts=4):
     :return: Список путей к созданным файлам.
     """
     os.makedirs(output_dir, exist_ok=True)
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Проверяем существование файла
     if not os.path.exists(input_audio):
         raise FileNotFoundError(f"Файл не найден: {input_audio}")
@@ -113,6 +114,7 @@ def convert_to_wav(input_audio, output_dir, output_prefix="part_", num_parts=4):
 
 # Удаление фонового шума и музыки с помощью Demucs
 def clean_audio_with_demucs(input_audio, output_dir):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     # Загрузка предобученной модели
     print("Загрузка модели Demucs...")
     model = get_model("mdx_extra_q")   # Используйте 'htdemucs', 'mdx_extra_q', и т.д.
@@ -170,6 +172,8 @@ def transcribe_audio(input_audio, output_dir, model, transcription_file="transcr
     :param model: Предзагруженная модель Whisper.
     :param transcription_file: Имя JSON файла для сохранения.
     """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     # Выполняем транскрипцию
     print(f"Начало транскрипции файла: {input_audio}")
     result = model.transcribe(input_audio, language="Russian")
