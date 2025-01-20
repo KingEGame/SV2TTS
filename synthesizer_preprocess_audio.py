@@ -1,4 +1,4 @@
-from synthesizer.preprocess import preprocess_dataset
+from synthesizer.preprocess import preprocess_dataset, preprocess_custom_dataset
 from synthesizer.hparams import hparams
 from utils.argutils import print_args
 from pathlib import Path
@@ -31,17 +31,20 @@ if __name__ == "__main__":
         "Name of the dataset directory to process.")
     parser.add_argument("--subfolders", type=str, default="train-clean-100,train-clean-360", help=\
         "Comma-separated list of subfolders to process inside your dataset directory")
+    parser.add_argument("--custom", action="store_true", help="Use custom dataset structure.")
     args = parser.parse_args()
 
-    # Process the arguments
+    # # Обработка аргументов и создание директорий (остальное без изменений)
     if not hasattr(args, "out_dir"):
         args.out_dir = args.datasets_root.joinpath("SV2TTS", "synthesizer")
-
-    # Create directories
     assert args.datasets_root.exists()
     args.out_dir.mkdir(exist_ok=True, parents=True)
 
-    # Preprocess the dataset
     print_args(args, parser)
     args.hparams = hparams.parse(args.hparams)
-    preprocess_dataset(**vars(args))
+
+    # Выбор функции предобработки
+    if getattr(args, "custom", False):
+        preprocess_custom_dataset(**vars(args))
+    else:
+        preprocess_dataset(**vars(args))

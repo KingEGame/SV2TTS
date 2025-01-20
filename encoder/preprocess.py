@@ -182,3 +182,102 @@ def preprocess_voxceleb2(datasets_root: Path, out_dir: Path, skip_existing=False
     # Preprocess all speakers
     speaker_dirs = list(dataset_root.joinpath("dev", "aac").glob("*"))
     _preprocess_speaker_dirs(speaker_dirs, dataset_name, datasets_root, out_dir, skip_existing, logger)
+
+def preprocess_custom_dataset(datasets_root: Path, out_dir: Path, skip_existing: bool = False):
+    """
+    Обрабатывает кастомный датасет, создаёт mel-спектрограммы и сохраняет их
+    в структуре, совместимой с encoder_train, объединяя все файлы под одним "спикером".
+    Параллельная обработка на уровне отдельных аудиофайлов.
+    """
+
+    # Используем имя датасета "custom" для логирования и объединения
+    dataset_name = "encoder"
+
+    # Устанавливаем выходные директории
+    speaker_out_dir = out_dir / dataset_name
+    speaker_out_dir.mkdir(parents=True, exist_ok=True)
+
+    # # Инициализация логгера
+    # dataset_root_log, logger = _init_preprocess_dataset(dataset_name, datasets_root, out_dir)
+    # if not dataset_root_log:
+    #     return
+
+    logger = DatasetLog(out_dir, dataset_name)
+
+    datasets_root = datasets_root
+    # 2. Получаем список всех томов (поддиректорий) в корне набора данных
+    volume_dirs = [d for d in datasets_root.iterdir() if d.is_dir()]
+    audio_infos = []
+    for volume_dir in volume_dirs:
+        csv_path = volume_dir.joinpath("dataset.csv")
+        # dataset_dir = dataset_csv.parent
+        with open(csv_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("|")
+                if len(parts) < 2:
+                    continue
+                file_path, transcription = parts[0].strip(), parts[1].strip()
+                # Надёжное объединение пути: берем базовую директорию для текущего CSV
+                full_audio_path = file_path.lstrip("/\\")
+                audio_infos.append((full_audio_path, transcription))
+
+    # Подготовка общего _sources.txt для спикера
+    sources_fpath = speaker_out_dir / "_sources.txt"
+    sources_file = sources_fpath.open("a" if skip_existing else "w", encoding="utf-8")
+
+    # Предполагаем, что speaker_out_dir и skip_existing уже определены выше.
+    process_fn = partial(process_file, speaker_out_dir=speaker_out_dir, skip_existing=skip_existing)
+
+    with Pool(processes=4) as pool:
+        results = list(tqdm(pool.imap(process_fn, audio_infos), total=len(audio_infos), desc="Processing files"))
+
+    # Запись результатов в _sources.txt и сбор длительностей
+    for result in results:
+        if result is None:
+            continue
+        out_fname, original_path, duration = result
+        sources_file.write(f"{out_fname},{original_path}\n")
+        logger.add_sample(duration=duration)
+
+    sources_file.close()
+    logger.finalize()
+    print(f"Обработка кастомного датасета {dataset_name} завершена.")
+
+def process_file(task, speaker_out_dir, skip_existing):
+    import numpy as np
+    from encoder import audio
+    # Распаковываем задачу
+    audio_path, transcription = task
+    audio_path = Path(audio_path)  # Преобразование к Path
+    if not audio_path.exists():
+        print(f"Ошибка: файл {audio_path} не существует. Пропускаем.")
+        return None
+    try:
+        wav = audio.preprocess_wav(audio_path.resolve())
+        if len(wav) == 0:
+            return None
+
+        frames = audio.wav_to_mel_spectrogram(wav)
+        if len(frames) < partials_n_frames:
+            return None
+
+        out_fname = f"{generate_unique_filename(audio_path.stem)}.npy"
+        out_fpath = speaker_out_dir / out_fname
+
+        if skip_existing and out_fpath.exists():
+            return None
+
+        np.save(out_fpath, frames)
+        duration = len(wav) / sampling_rate
+        return (out_fname, str(audio_path.resolve()), duration)
+    except Exception as e:
+        print(f"Ошибка при обработке {audio_path}: {e}")
+        return None
+
+import hashlib
+
+def generate_unique_filename(file_name):
+    # Используем хэш пути или содержимого файла для уникальности
+    # Например, хэш пути:
+    file_hash = hashlib.md5(str(file_name).encode()).hexdigest()
+    return f"{file_name}_{file_hash}"

@@ -256,3 +256,149 @@ def create_embeddings(synthesizer_root: Path, encoder_model_fpath: Path, n_proce
     job = Pool(n_processes).imap(func, fpaths)
     list(tqdm(job, "Embedding", len(fpaths), unit="utterances"))
 
+def preprocess_custom_dataset(
+        datasets_root: Path,
+        out_dir: Path,
+        n_processes: int = 4,
+        skip_existing: bool = False,
+        hparams=None,
+        no_alignments: bool = False,
+        datasets_name: str = "CustomDataset",
+        # Любые дополнительные аргументы, специфичные для вашей архитектуры, можно добавить здесь
+        **kwargs
+):
+    import csv
+    """
+    Предобрабатывает набор данных с кастомной структурой директорий, аналогично preprocess_dataset,
+    но адаптировано под вашу архитектуру.
+    """
+    print(f"Начинается предобработка датасета: {datasets_name}")
+
+    # 1. Путь к корневой директории набора данных
+    dataset_root = datasets_root  # в вашем случае директория уже указывает на dataset_root
+
+    # 2. Получаем список всех томов (поддиректорий) в корне набора данных
+    volume_dirs = [d for d in dataset_root.iterdir() if d.is_dir()]
+
+    # 3. Создаем необходимые выходные директории
+    out_dir.joinpath("mels").mkdir(exist_ok=True, parents=True)
+    out_dir.joinpath("audio").mkdir(exist_ok=True, parents=True)
+
+    metadata_fpath = out_dir.joinpath("train.txt")
+    metadata_mode = "a" if skip_existing else "w"
+    metadata_file = metadata_fpath.open(metadata_mode, encoding="utf-8")
+
+    # 5. Собираем задачи на обработку аудиофайлов
+    tasks = []
+    for volume_dir in volume_dirs:
+        csv_path = volume_dir.joinpath("dataset.csv")
+        chunks_dir = volume_dir.joinpath("chunks")
+        if csv_path.exists() and chunks_dir.exists():
+            with csv_path.open(newline='', encoding='utf-8') as csvfile:
+                reader = csv.reader(csvfile, delimiter='|')
+                for row in reader:
+                    # Предполагаем, что CSV: путь_к_файлу|транскрипция
+                    # Удалим лишние пробелы
+                    row = [item.strip() for item in row]
+                    if len(row) < 2:
+                        continue  # Пропуск некорректных строк
+                    wav_rel_path, transcript = row[0], row[1]
+                    # Вместо использования chunks_dir
+                    # base_dir_for_wav = csv_path.parent  # директория, где находится CSV
+                    wav_path = wav_rel_path.lstrip("/")
+                    wav_path = Path(wav_path)
+                    if wav_path.exists():
+                        tasks.append((wav_path, transcript))
+                    else:
+                        print(f"Файл {wav_path} не найден!")
+
+
+    # Настраиваем частичное применение глобальной функции process_wrapper
+    wrapped_process = partial(process_wrapper,
+                              out_dir=out_dir,
+                              hparams=hparams,
+                              skip_existing=skip_existing,
+                              no_alignments=no_alignments)
+
+    with Pool(n_processes) as pool:
+        for metadatum in tqdm(pool.imap(wrapped_process, tasks), total=len(tasks), desc="Processing files"):
+            if metadatum is not None:
+                metadata_file.write("|".join(str(x) for x in metadatum) + "\n")
+
+    metadata_file.close()
+
+    with metadata_fpath.open("r", encoding="utf-8") as metadata_file:
+        metadata = [line.strip().split("|") for line in metadata_file if line.strip()]
+
+    if not metadata:
+        print("Метаданные отсутствуют. Проверьте правильность генерации файла train.txt.")
+    else:
+        mel_frames = sum(int(m[4]) for m in metadata if len(m) > 4)
+        timesteps = sum(int(m[3]) for m in metadata if len(m) > 3)
+        sample_rate = hparams.sample_rate
+        hours = (timesteps / sample_rate) / 3600
+
+        print(f"The dataset consists of {len(metadata)} utterances, {mel_frames} mel frames, {timesteps} audio timesteps ({hours:.2f} hours).")
+
+        max_text_length = max((len(m[5]) for m in metadata if len(m) > 5), default=0)
+        max_mel_frames = max((int(m[4]) for m in metadata if len(m) > 4), default=0)
+        max_audio_timesteps = max((int(m[3]) for m in metadata if len(m) > 3), default=0)
+
+        print(f"Max input length (text chars): {max_text_length}")
+        print(f"Max mel frames length: {max_mel_frames}")
+        print(f"Max audio timesteps length: {max_audio_timesteps}")
+
+import hashlib
+
+def generate_unique_filename(file_name, extension=".npy"):
+    # Используем хэш пути или содержимого файла для уникальности
+    # Например, хэш пути:
+    file_hash = hashlib.md5(file_name.encode()).hexdigest()
+    return f"{file_name}_{file_hash}"
+
+
+# Обертка для передачи нескольких аргументов в Pool.imap
+# Вынесем process_wrapper на верхний уровень
+def process_wrapper(args, out_dir, hparams, skip_existing, no_alignments):
+    # unpack args and call process_file
+    wav_path, transcript = args
+    return process_file(wav_path, transcript, out_dir, hparams, skip_existing, no_alignments)
+
+def load_audio(file_path, target_sr):
+    # Загружаем файл и определяем его частоту дискретизации
+    wav, sr = librosa.load(file_path, sr=None)
+    if sr != target_sr:
+        # Только если частота отличается, пересэмплируем
+        wav = librosa.resample(wav, orig_sr=sr, target_sr=target_sr)
+    return wav
+
+# 4. Функция для обработки одного аудиофайла
+def process_file(wav_path, transcript, out_dir, hparams, skip_existing, no_alignments):
+    # Загрузка аудио
+    try:
+        # Попытка загрузить аудио
+        wav = load_audio(wav_path, hparams.sample_rate)
+    except ValueError as e:
+        # Если сигнал пустой или не может быть загружен, пропустить этот файл
+        print(f"Пропуск файла {wav_path}: {e}")
+        return None
+
+    # Проверяем, что сигнал не пустой
+    if len(wav) == 0:
+        print(f"Пропуск файла {wav_path}: пустой аудиосигнал")
+        return None
+
+    if hparams.rescale:
+        wav = wav / np.abs(wav).max() * hparams.rescaling_max
+
+    # Формирование базового имени файла (basename) для сохранения результатов
+    basename = generate_unique_filename(wav_path.stem)
+
+    metadatum = process_utterance(wav, transcript, out_dir, basename,
+                                  skip_existing, hparams)
+    if metadatum is None:
+        print(f"Утверждение для файла {wav_path} было пропущено.")
+    else:
+        return metadatum
+
+

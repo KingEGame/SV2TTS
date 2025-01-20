@@ -1,4 +1,4 @@
-from encoder.preprocess import preprocess_librispeech, preprocess_voxceleb1, preprocess_voxceleb2
+from encoder.preprocess import preprocess_librispeech, preprocess_voxceleb1, preprocess_voxceleb2, preprocess_custom_dataset
 from utils.argutils import print_args
 from pathlib import Path
 import argparse
@@ -25,7 +25,7 @@ if __name__ == "__main__":
         formatter_class=MyFormatter
     )
     parser.add_argument("datasets_root", type=Path, help=\
-        "Path to the directory containing your LibriSpeech/TTS and VoxCeleb datasets.")
+        "Path to the directory containing your LibriSpeech/TTS and VoxCeleb datasets. Or your custom dataset_root_path")
     parser.add_argument("-o", "--out_dir", type=Path, default=argparse.SUPPRESS, help=\
         "Path to the output directory that will contain the mel spectrograms. If left out, "
         "defaults to <datasets_root>/SV2TTS/encoder/")
@@ -64,6 +64,7 @@ if __name__ == "__main__":
         "librispeech_other": preprocess_librispeech,
         "voxceleb1": preprocess_voxceleb1,
         "voxceleb2": preprocess_voxceleb2,
+        "custom": preprocess_custom_dataset,  # Добавлено для кастомного датасета
     }
     args = vars(args)
     for dataset in args.pop("datasets"):
