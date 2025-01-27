@@ -109,13 +109,13 @@ pip install -r requirements.txt
 #### Предобработка Энкодера
 
 ```bash
-python ./encode_preprocessing.py -o ./dataset -d custom ./processed_data/
+python ./encode_preprocessing.py -o ./dataset/encoder -d custom ./processed_data/
 ```
 
 #### Предобработка Синтезатора
 
 ```bash
-python ./synthesizer_preprocess_audio.py --duration=0.1 --no_alignments --datasets_name "01" --custom
+python ./synthesizer_preprocess_audio.py ./processed_data --out_dir ./dataset2 --n_processes 4 --hparams "rescale=True,utterance_min_duration=0.1" --no_alignments --datasets_name "01" --custom
 ```
 
 ### 2. Обучение Энкодера
